@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "dominioncraft",
+  "version": "${version}",
+  "name": "DominionCraft",
+  "description": "Города, территории, PvP и Политика!",
+  "authors": ["Darkness"],
+  "contact": {
+    "sources": "https://github.com/...",
+    "discord": "https://discord.gg/...",
+    "homepage": "https://worldcraft.fun/"
+  },
+  "license": "MIT",
+  "icon": "assets/dominioncraft/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "org.worldcraft.dominioncraft.Dominioncraft"
+    ],
+    "client": [
+      "org.worldcraft.dominioncraft.client.HudClient",
+      "org.worldcraft.dominioncraft.client.HudOverlay"
+    ],
+    "fabric-datagen": [
+      "org.worldcraft.dominioncraft.client.DominioncraftDataGenerator"
+    ]
+  },
+  "mixins": [
+    "dominioncraft.mixins.json",
+    {
+      "config": "dominioncraft.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric": "*",
+    "minecraft": "1.20.1"
+  }
+}
