@@ -7,30 +7,22 @@ import java.util.*;
 
 /**
  * Данные одного города.
- *
- * <p>Содержит:</p>
- * <ul>
- *   <li>участников, их {@link TownRank ранги};</li>
- *   <li>клейм-чанки и локальные override-права;</li>
- *   <li>глобальный и локальные PvP-флаги;</li>
- *   <li>активные приглашения.</li>
- * </ul>
  */
 public class Town {
 
     /* ------------------------------------------------------------------ */
-    /*                            базовые поля                             */
+    /*                             базовые поля                            */
     /* ------------------------------------------------------------------ */
 
     private final UUID id;
     private String     name;
     private final UUID mayor;
 
-    /** Включён ли PvP во всём городе по умолчанию. */
     private boolean townPvp = false;
+    private boolean townExplosion = false;
 
     /* ------------------------------------------------------------------ */
-    /*                             коллекции                               */
+    /*                              коллекции                              */
     /* ------------------------------------------------------------------ */
 
     /** Все участники города. */
@@ -40,8 +32,7 @@ public class Town {
     private final Map<UUID, TownRank> ranks = new HashMap<>();
 
     /** Права, привязанные к каждому рангу. */
-    private final Map<TownRank, EnumSet<TownPermission>> rankPerms =
-            new EnumMap<>(TownRank.class);
+    public final Map<TownRank, EnumSet<TownPermission>> rankPerms = new EnumMap<>(TownRank.class);
 
     /** Все заклеймленные чанки. */
     private final Map<ChunkPos, TownChunk> claims = new HashMap<>();
@@ -49,46 +40,58 @@ public class Town {
     /** Активные приглашения (UUID игроков). */
     private final Set<UUID> invites = new HashSet<>();
 
+    public void setTownExplosion(boolean flag) { this.townExplosion = flag; }
+    public boolean getTownExplosion() { return townExplosion; }
+
+    public boolean isChunkExplosion(ChunkPos pos) {
+        TownChunk tc = claims.get(pos);
+        return tc != null && tc.getExplosion() != null ? tc.getExplosion() : townExplosion;
+    }
+
     /* ------------------------------------------------------------------ */
     /*                              конструктор                            */
     /* ------------------------------------------------------------------ */
 
     public Town(UUID id, String name, UUID mayor) {
-        this.id   = id;
-        this.name = name;
-        this.mayor= mayor;
+        this.id    = id;
+        this.name  = name;
+        this.mayor = mayor;
 
         /* мэра сразу добавляем участником с рангом MAYOR */
         addMember(mayor, TownRank.MAYOR);
 
         /* ---------- базовые права рангов ---------- */
         rankPerms.put(TownRank.MAYOR, EnumSet.allOf(TownPermission.class));
-
         rankPerms.put(TownRank.ASSISTANT, EnumSet.of(
                 TownPermission.BUILD, TownPermission.BREAK,
                 TownPermission.CONTAINER, TownPermission.INTERACT,
+                TownPermission.FARM, TownPermission.ANIMAL,
                 TownPermission.INVITE, TownPermission.KICK,
                 TownPermission.MANAGE_CLAIMS, TownPermission.SET_RANK,
                 TownPermission.CHUNK_PERM, TownPermission.MANAGE_PVP,
-                TownPermission.CHUNK_PVP, TownPermission.DELETE));
+                TownPermission.CHUNK_PVP, TownPermission.DELETE,
+                TownPermission.EXPLOSION, TownPermission.CHUNK_EXPLOSION
+        ));
 
-        rankPerms.put(TownRank.MEMBER, EnumSet.of(
-                TownPermission.BUILD, TownPermission.BREAK,
-                TownPermission.CONTAINER, TownPermission.INTERACT));
-
-        rankPerms.put(TownRank.RECRUIT, EnumSet.of(
-                TownPermission.INTERACT));
+        // У MEMBER и RECRUIT по умолчанию нет никаких прав!
+        rankPerms.put(TownRank.MEMBER, EnumSet.noneOf(TownPermission.class));
+        rankPerms.put(TownRank.RECRUIT, EnumSet.noneOf(TownPermission.class));
     }
 
     /* ------------------------------------------------------------------ */
-    /*                     участники / ранги / приглашения                */
+    /*                  участники / ранги / приглашения                    */
     /* ------------------------------------------------------------------ */
 
     /** Добавить игрока с указанным рангом (или обновить ранг). */
     public void addMember(UUID player, TownRank rank) {
         members.add(player);
-        ranks.put(player, rank);
+        ranks.put(player, rank != null ? rank : TownRank.MEMBER);
         invites.remove(player);
+    }
+
+    /** Добавить игрока как MEMBER (без явного ранга) */
+    public void addMember(UUID player) {
+        addMember(player, TownRank.MEMBER);
     }
 
     /** Удалить игрока из города. */
@@ -97,9 +100,9 @@ public class Town {
         ranks.remove(player);
     }
 
-    /** Получить ранг игрока ({@code RECRUIT}, если не найден). */
+    /** Получить ранг игрока, или null если не состоит в городе. */
     public TownRank getRank(UUID player) {
-        return ranks.getOrDefault(player, TownRank.RECRUIT);
+        return ranks.get(player); // null если игрок не состоит
     }
 
     /** Изменить ранг уже состоящего участника. */
@@ -109,8 +112,10 @@ public class Town {
 
     /** Проверка глобального (рангового) права. */
     public boolean hasPermission(UUID player, TownPermission perm) {
+        TownRank rank = getRank(player);
+        if (rank == null) return false;
         return rankPerms
-                .getOrDefault(getRank(player), EnumSet.noneOf(TownPermission.class))
+                .getOrDefault(rank, EnumSet.noneOf(TownPermission.class))
                 .contains(perm);
     }
 
@@ -125,58 +130,24 @@ public class Town {
     /*                             PvP-флаги                               */
     /* ------------------------------------------------------------------ */
 
-    /** Включить или выключить PvP во всём городе. */
     public void setTownPvp(boolean flag) { this.townPvp = flag; }
-
-    /** @return глобальный PvP-флаг города. */
     public boolean getTownPvp()          { return townPvp; }
 
-    /**
-     * Итоговый PvP-флаг указанного чанка
-     * (учитывает {@link TownChunk#getPvp() локальный override},
-     * если тот не {@code null}).
-     */
     public boolean isChunkPvp(ChunkPos pos) {
         TownChunk tc = claims.get(pos);
-        return tc != null && tc.getPvp() != null ? tc.getPvp()
-                : townPvp;
+        return tc != null && tc.getPvp() != null ? tc.getPvp() : townPvp;
     }
 
     /* ------------------------------------------------------------------ */
     /*                              клеймы                                 */
     /* ------------------------------------------------------------------ */
 
-    /** Заклеймить чанк (вызов только из {@link TownData}). */
-    void claim(ChunkPos pos) {
-        claims.putIfAbsent(pos, new TownChunk(pos));
-    }
-
-    /** Используется при загрузке из NBT — сразу кладёт готовый объект. */
-    void putChunk(TownChunk ch) {
-        claims.put(ch.getPos(), ch);
-    }
-
-    /** Расклеймить чанк (вызов только из {@link TownData}). */
-    void unclaim(ChunkPos pos) {
-        claims.remove(pos);
-    }
-
-    /** @return владеет ли город указанным чанком. */
-    public boolean owns(ChunkPos pos) {
-        return claims.containsKey(pos);
-    }
-
-    /** Получить объект {@link TownChunk} по координатам (или {@code null}). */
-    public TownChunk chunk(ChunkPos pos) {
-        return claims.get(pos);
-    }
-
-    /** @return общее число клеймов города. */
-    public int getClaimCount() {
-        return claims.size();
-    }
-
-    /** @return неизменяемая коллекция всех чанков. */
+    void claim(ChunkPos pos) { claims.putIfAbsent(pos, new TownChunk(pos)); }
+    void putChunk(TownChunk ch) { claims.put(ch.getPos(), ch); }
+    void unclaim(ChunkPos pos) { claims.remove(pos); }
+    public boolean owns(ChunkPos pos) { return claims.containsKey(pos); }
+    public TownChunk chunk(ChunkPos pos) { return claims.get(pos); }
+    public int getClaimCount() { return claims.size(); }
     public Collection<TownChunk> allChunks() {
         return Collections.unmodifiableCollection(claims.values());
     }
@@ -185,10 +156,6 @@ public class Town {
     /*                         утилитные методы                            */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Получить имя мэра из кеша профилей; если профиль ещё не загружен —
-     * вернуть строковое представление UUID.
-     */
     public String getMayorName(MinecraftServer srv) {
         return srv.getProfileCache().get(mayor)
                 .map(com.mojang.authlib.GameProfile::getName)
@@ -196,11 +163,11 @@ public class Town {
     }
 
     /* ------------------------------------------------------------------ */
-    /*                               getters                               */
+    /*                                getters                              */
     /* ------------------------------------------------------------------ */
 
-    public UUID getId()           { return id; }
-    public String getName()       { return name; }
-    public UUID getMayor()        { return mayor; }
+    public UUID getId()           { return id;      }
+    public String getName()       { return name;    }
+    public UUID getMayor()        { return mayor;   }
     public Set<UUID> getMembers() { return Collections.unmodifiableSet(members); }
 }

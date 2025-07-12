@@ -4,6 +4,14 @@
   "package": "org.worldcraft.dominioncraft.mixin",
   "compatibilityLevel": "JAVA_17",
   "mixins": [
+    "LivingEntityMixin",
+    "UniversalInteractMixin",
+    "FarmlandMixin",
+    "LivingEntityPotionMixin",
+    "ProjectileMixin",
+    "ExplosionMixin"
+
+
   ],
   "injectors": {
     "defaultRequire": 1

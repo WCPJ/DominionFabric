@@ -18,5 +18,6 @@ public enum TownRank {
     MAYOR,
     ASSISTANT,
     MEMBER,
-    RECRUIT
+    RECRUIT,
+
 }

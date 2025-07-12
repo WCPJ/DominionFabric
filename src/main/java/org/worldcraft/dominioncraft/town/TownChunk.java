@@ -12,6 +12,7 @@ import java.util.*;
  * <ul>
  *   <li>персональные override-права игроков ({@link #playerPerms});</li>
  *   <li>локальный PvP-флаг (может переопределять городской);</li>
+ *   <li>локальный Explosion-флаг (может переопределять городской);</li>
  *   <li>координаты чанка ({@link #pos}).</li>
  * </ul>
  */
@@ -23,6 +24,9 @@ public class TownChunk {
 
     /** Координаты чанка. */
     private final ChunkPos pos;
+
+    /** Override флаг для взрывов (null — наследует город, true/false — override). */
+    private Boolean explosionOverride = null;
 
     /** PvP-override: {@code true} / {@code false} / {@code null} (наследует город). */
     private Boolean pvpOverride = null;
@@ -39,6 +43,18 @@ public class TownChunk {
     }
 
     /* ------------------------------------------------------------------ */
+    /*                           EXPLOSION-флаг                            */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Установить локальный флаг для взрывов (null — сброс, наследовать город).
+     */
+    public void setExplosion(Boolean flag) { this.explosionOverride = flag; }
+
+    /** @return локальный флаг для взрывов; null — наследует город. */
+    public Boolean getExplosion() { return explosionOverride; }
+
+    /* ------------------------------------------------------------------ */
     /*                           PvP-флаг                                  */
     /* ------------------------------------------------------------------ */
 
@@ -51,7 +67,7 @@ public class TownChunk {
         this.pvpOverride = flag;
     }
 
-    /** @return локальный PvP-флаг; {@code null}, если наследовать город. */
+    /** @return локальный PvP-флаг; {@code null}, если наследует город. */
     public Boolean getPvp() {
         return pvpOverride;
     }
@@ -96,6 +112,7 @@ public class TownChunk {
         tag.putInt("X", pos.x);
         tag.putInt("Z", pos.z);
         if (pvpOverride != null) tag.putBoolean("PvP", pvpOverride);
+        if (explosionOverride != null) tag.putBoolean("Explosion", explosionOverride);
 
         ListTag list = new ListTag();
         for (var entry : playerPerms.entrySet()) {
@@ -117,6 +134,7 @@ public class TownChunk {
     public static TownChunk fromNbt(CompoundTag tag) {
         TownChunk tc = new TownChunk(new ChunkPos(tag.getInt("X"), tag.getInt("Z")));
         if (tag.contains("PvP")) tc.pvpOverride = tag.getBoolean("PvP");
+        if (tag.contains("Explosion")) tc.explosionOverride = tag.getBoolean("Explosion");
 
         ListTag list = tag.getList("PlayerPerms", Tag.TAG_COMPOUND);
         for (Tag t : list) {
