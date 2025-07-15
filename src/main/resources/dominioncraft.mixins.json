@@ -9,7 +9,9 @@
     "FarmlandMixin",
     "LivingEntityPotionMixin",
     "ProjectileMixin",
-    "ExplosionMixin"
+    "ExplosionMixin",
+    "PistonProtectionMixin",
+    "PistonStructureResolverAccessor"
 
 
   ],

@@ -29,18 +29,19 @@ public class TownData extends SavedData {
     /** Максимальное число чанков, которое может иметь один город. */
     private static final int MAX_CLAIMS = 64;
 
+    public Town getTownByName(String name) {
+        for (Town t : getTownMap().values()) {
+            if (t.getName().equalsIgnoreCase(name)) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     /* ------------------------------------------------------------------ */
     /*                             публичный API                          */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Создать новый город и сразу заклеймить спавн-чанк.
-     *
-     * @param name  название города
-     * @param mayor UUID игрока-мэра
-     * @param spawn чанк спавна
-     * @return созданный {@link Town}
-     */
     public Town createTown(String name, UUID mayor, ChunkPos spawn) {
         UUID id = UUID.randomUUID();
         Town t  = new Town(id, name, mayor);
@@ -50,14 +51,11 @@ public class TownData extends SavedData {
         return t;
     }
 
-    /** Полностью удалить город и очистить все его клеймы. */
     public void deleteTown(Town t) {
         t.allChunks().forEach(c -> chunkMap.remove(c.getPos()));
         towns.remove(t.getId());
         setDirty();
     }
-
-    /* ---------- getters ---------- */
 
     public Town getTown(UUID id)                 { return towns.get(id); }
 
@@ -74,12 +72,9 @@ public class TownData extends SavedData {
         return null;
     }
 
-    /* ---------- claim / unclaim ---------- */
-
     public boolean claimChunk(Town t, ChunkPos pos) {
         if (t.getClaimCount() >= MAX_CLAIMS) return false;
         if (chunkMap.containsKey(pos))        return false;
-
         t.claim(pos);
         chunkMap.put(pos, t.getId());
         setDirty();
@@ -108,8 +103,10 @@ public class TownData extends SavedData {
             tc.putString("Name", t.getName());
             tc.putUUID("Mayor",  t.getMayor());
             tc.putBoolean("TownPvP", t.getTownPvp());
+            tc.putBoolean("TownExplosion", t.getTownExplosion());
+            tc.putBoolean("Open", t.isOpen());
 
-            /* ----------- участники + ранги ----------- */
+            // Участники + ранги
             ListTag mem = new ListTag();
             for (UUID p : t.getMembers()) {
                 CompoundTag m = new CompoundTag();
@@ -119,12 +116,12 @@ public class TownData extends SavedData {
             }
             tc.put("Members", mem);
 
-            /* -------------- приглашения -------------- */
+            // Приглашения
             ListTag inv = new ListTag();
             for (UUID p : t.getInvites()) inv.add(NbtUtils.createUUID(p));
             tc.put("Invites", inv);
 
-            /* ---------------- клеймы ----------------- */
+            // Клеймы
             ListTag claims = new ListTag();
             for (TownChunk ch : t.allChunks()) claims.add(ch.toNbt());
             tc.put("Claims", claims);
@@ -151,21 +148,23 @@ public class TownData extends SavedData {
             UUID   may = tc.getUUID("Mayor");
 
             Town t = new Town(id, nm, may);
-            t.setTownPvp(tc.getBoolean("TownPvP"));
+            if (tc.contains("TownPvP")) t.setTownPvp(tc.getBoolean("TownPvP"));
+            if (tc.contains("TownExplosion")) t.setTownExplosion(tc.getBoolean("TownExplosion"));
+            if (tc.contains("Open")) t.setOpen(tc.getBoolean("Open"));
 
-            /* участники */
+            // Участники
             for (Tag mm : tc.getList("Members", Tag.TAG_COMPOUND)) {
                 CompoundTag m = (CompoundTag) mm;
                 t.addMember(m.getUUID("U"), TownRank.valueOf(m.getString("R")));
             }
 
-            /* приглашения */
+            // Приглашения
             for (Tag inv : tc.getList("Invites", Tag.TAG_INT_ARRAY)) {
                 UUID p = NbtUtils.loadUUID(inv);
                 t.addInvite(p);
             }
 
-            /* клеймы */
+            // Клеймы
             for (Tag cc : tc.getList("Claims", Tag.TAG_COMPOUND)) {
                 TownChunk ch = TownChunk.fromNbt((CompoundTag) cc);
                 t.putChunk(ch);

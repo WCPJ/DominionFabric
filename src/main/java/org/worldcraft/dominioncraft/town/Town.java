@@ -20,6 +20,7 @@ public class Town {
 
     private boolean townPvp = false;
     private boolean townExplosion = false;
+    private boolean open = false; // по умолчанию закрыт
 
     /* ------------------------------------------------------------------ */
     /*                              коллекции                              */
@@ -42,6 +43,12 @@ public class Town {
 
     public void setTownExplosion(boolean flag) { this.townExplosion = flag; }
     public boolean getTownExplosion() { return townExplosion; }
+    public boolean isOpen() {
+        return open;
+    }
+    public void setOpen(boolean open) {
+        this.open = open;
+    }
 
     public boolean isChunkExplosion(ChunkPos pos) {
         TownChunk tc = claims.get(pos);

@@ -14,12 +14,16 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.ChunkPos;
 import org.worldcraft.dominioncraft.town.*;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -59,20 +63,34 @@ public final class TownCommands {
 
     /* ---------- /town create <name> ---------- */
     private static int create(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
-        ServerPlayer pl   = ctx.getSource().getPlayerOrException();
-        String name       = StringArgumentType.getString(ctx, "name");
-        TownData data     = TownData.get(pl.serverLevel());
-        ChunkPos pos      = new ChunkPos(pl.blockPosition());
+        ServerPlayer p = ctx.getSource().getPlayerOrException();
+        String name    = StringArgumentType.getString(ctx, "name");
 
-        if (data.getTownByChunk(pos) != null) {
+        TownData d   = TownData.get(p.serverLevel());
+        ChunkPos pos = new ChunkPos(p.blockPosition());
+
+        if (d.getTownByChunk(pos) != null) {
             ctx.getSource().sendFailure(Component.literal("§cЭтот чанк уже занят."));
             return 0;
         }
-        data.createTown(name, pl.getUUID(), pos);
+
+        // Новый блок: Показываем, чего не хватает!
+        Map<Item, Integer> missing = TownRequirements.getMissingItems(p);
+        if (!missing.isEmpty()) {
+            ctx.getSource().sendFailure(Component.literal(TownRequirements.missingText(missing)));
+            return 0;
+        }
+
+        // Всё есть — снимаем ресурсы
+        TownRequirements.removeRequiredItems(p);
+
+        d.createTown(name, p.getUUID(), pos);
         ctx.getSource().sendSuccess(() ->
                 Component.literal("§aГород «" + name + "» создан!"), false);
         return Command.SINGLE_SUCCESS;
     }
+
+
 
     /* ---------- /town delete ---------- */
     private static int deleteTown(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
@@ -131,6 +149,66 @@ public final class TownCommands {
         success(ctx,"§eЧанк расклеймлен.");
         return Command.SINGLE_SUCCESS;
     }
+    private static int openTown(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer p = ctx.getSource().getPlayerOrException();
+        TownData d = TownData.get(p.serverLevel());
+        Town t = d.getTownOfPlayer(p.getUUID());
+
+        if (t == null) {
+            ctx.getSource().sendFailure(Component.literal("§cВы не в городе."));
+            return 0;
+        }
+        if (!t.hasPermission(p.getUUID(), TownPermission.TOWN_OPEN)) {
+            ctx.getSource().sendFailure(Component.literal("§cНет права менять режим города."));
+            return 0;
+        }
+        t.setOpen(true);
+        d.setDirty();
+        ctx.getSource().sendSuccess(() -> Component.literal("§aГород открыт для вступления!"), false);
+        return Command.SINGLE_SUCCESS;
+    }
+    private static int closeTown(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer p = ctx.getSource().getPlayerOrException();
+        TownData d = TownData.get(p.serverLevel());
+        Town t = d.getTownOfPlayer(p.getUUID());
+        if (t == null) {
+            ctx.getSource().sendFailure(Component.literal("§cВы не в городе."));
+            return 0;
+        }
+        if (!t.hasPermission(p.getUUID(), TownPermission.TOWN_OPEN)) {
+            ctx.getSource().sendFailure(Component.literal("§cНет права менять режим города."));
+            return 0;
+        }
+        t.setOpen(false);
+        d.setDirty();
+        ctx.getSource().sendSuccess(() -> Component.literal("§cГород закрыт!"), false);
+        return Command.SINGLE_SUCCESS;
+    }
+    private static int joinTown(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer p = ctx.getSource().getPlayerOrException();
+        String name = StringArgumentType.getString(ctx, "name");
+
+        TownData d = TownData.get(p.serverLevel());
+        Town t = d.getTownByName(name);
+        if (t == null) {
+            ctx.getSource().sendFailure(Component.literal("§cГород не найден."));
+            return 0;
+        }
+        if (!t.isOpen()) {
+            ctx.getSource().sendFailure(Component.literal("§cГород закрыт для свободного вступления."));
+            return 0;
+        }
+        if (d.getTownOfPlayer(p.getUUID()) != null) {
+            ctx.getSource().sendFailure(Component.literal("§cВы уже в городе."));
+            return 0;
+        }
+        t.addMember(p.getUUID(), TownRank.RECRUIT);
+        d.setDirty();
+        ctx.getSource().sendSuccess(() -> Component.literal("§aВы вступили в город §e" + t.getName()), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+
 
     /* ---------- /town info ---------- */
     private static int info(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
@@ -139,22 +217,113 @@ public final class TownCommands {
         ChunkPos pos     = new ChunkPos(pl.blockPosition());
         Town t           = d.getTownByChunk(pos);
 
-        if (t == null) return fail(ctx,"§eДикие земли.");
+        if (t == null) return fail(ctx, "§eДикие земли.");
 
-        Boolean chunkExpl = t.chunk(pos)!=null? t.chunk(pos).getExplosion():null;
-        String explosionLine = "§7Взрывы: §a" +
-                (chunkExpl!=null? (chunkExpl?"ON§7 (чанк)":"OFF§7 (чанк)") :
-                        (t.getTownExplosion()? "ON§7 (город)" : "OFF§7 (город)"));
+        StringBuilder sb = new StringBuilder();
+        sb.append("§6==========[ §eГород: §f").append(t.getName()).append(" §6]==========\n");
+        sb.append("§7Мэр: §b").append(t.getMayorName(ctx.getSource().getServer())).append("\n");
 
-        String msg = "§6[§eГород §f" + t.getName() + "§6]\n" +
-                "§7Мэр: §b" + t.getMayorName(ctx.getSource().getServer()) + "\n" +
-                "§7Участников: §a" + t.getMembers().size() +
-                "  §7| Чанков: §a" + t.getClaimCount() +
-                "  §7| PvP: §a" + t.getTownPvp() + "\n" +
-                explosionLine;
-        success(ctx,msg);
+        // Список жителей (до 10, остальные "...и ещё N")
+        int membersCount = t.getMembers().size();
+        String residents = t.getMembers().stream()
+                .limit(10)
+                .map(uuid -> {
+                    var profile = ctx.getSource().getServer().getProfileCache().get(uuid);
+                    return profile.map(com.mojang.authlib.GameProfile::getName).orElse("???");
+                })
+                .reduce((a, b) -> a + "§7, §a" + b).orElse("§7-");
+
+        if (membersCount > 10) {
+            residents += " §7... и ещё §a" + (membersCount - 10);
+        }
+
+        sb.append("§7Жители [§a").append(membersCount).append("§7]: §a").append(residents).append("\n");
+
+        // Чанки и лимит
+        sb.append("§7Территория: §a").append(t.getClaimCount()).append("§7 / §e64 чанков\n");
+
+        // PvP
+        sb.append("§7PvP: ").append(t.getTownPvp() ? "§cON" : "§aOFF").append("\n");
+
+        // Взрывы
+        sb.append("§7Взрывы: ").append(t.getTownExplosion() ? "§cON" : "§aOFF").append("\n");
+
+        // Открыт ли город для вступления
+        sb.append("§7Вступление: ").append(t.isOpen() ? "§aОткрыт §7(/town join)" : "§cТолько по приглашениям").append("\n");
+
+        // Тут можно добавить список помощников, если надо:
+        long assistants = t.getMembers().stream().filter(uuid -> t.getRank(uuid) == TownRank.ASSISTANT).count();
+        if (assistants > 0) {
+            String assistantNames = t.getMembers().stream()
+                    .filter(uuid -> t.getRank(uuid) == TownRank.ASSISTANT)
+                    .map(uuid -> ctx.getSource().getServer().getProfileCache().get(uuid)
+                            .map(com.mojang.authlib.GameProfile::getName).orElse("???"))
+                    .reduce((a, b) -> a + "§7, §b" + b).orElse("");
+            sb.append("§7Помощники: §b").append(assistantNames).append("\n");
+        }
+
+        // Краткая строка о клейме где стоит игрок
+        TownChunk chunk = t.chunk(pos);
+        if (chunk != null) {
+            sb.append("§7[Этот чанк: ");
+            sb.append("PvP: ").append(chunk.getPvp() != null ? (chunk.getPvp() ? "§cON" : "§aOFF") : "§7наследует город").append(" | ");
+            sb.append("Взрывы: ").append(chunk.getExplosion() != null ? (chunk.getExplosion() ? "§cON" : "§aOFF") : "§7наследует город");
+            sb.append("]\n");
+        }
+
+        sb.append("§6=====================================");
+
+        success(ctx, sb.toString());
         return Command.SINGLE_SUCCESS;
     }
+    private static int ask(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer player = ctx.getSource().getPlayerOrException();
+        TownData d = TownData.get(player.serverLevel());
+
+        // Проверка: если уже в городе — ошибка!
+        if (d.getTownOfPlayer(player.getUUID()) != null) {
+            ctx.getSource().sendFailure(Component.literal("§cВы уже состоите в городе!"));
+            return 0;
+        }
+
+        // Получить список всех мэров онлайн
+        var onlineMayors = player.server.getPlayerList().getPlayers().stream()
+                .filter(p -> {
+                    Town t = d.getTownOfPlayer(p.getUUID());
+                    return t != null && t.getMayor().equals(p.getUUID());
+                })
+                .toList();
+
+        if (onlineMayors.isEmpty()) {
+            ctx.getSource().sendFailure(Component.literal("§cНет доступных мэров в сети!"));
+            return 0;
+        }
+
+        // Сообщение для мэров: кликабельно приглашать игрока
+        String askMsg = String.format("§eИгрок §b%s§e ищет город! ",
+                player.getGameProfile().getName());
+        String suggestCmd = "/town invite " + player.getGameProfile().getName();
+
+        var msg = net.minecraft.network.chat.Component.literal(askMsg)
+                .append(
+                        net.minecraft.network.chat.Component.literal("[Пригласить]")
+                                .withStyle(style -> style
+                                        .withColor(net.minecraft.ChatFormatting.GREEN)
+                                        .withClickEvent(new net.minecraft.network.chat.ClickEvent(
+                                                net.minecraft.network.chat.ClickEvent.Action.SUGGEST_COMMAND, suggestCmd
+                                        ))
+                                )
+                );
+
+        for (ServerPlayer mayor : onlineMayors) {
+            mayor.sendSystemMessage(msg);
+        }
+
+        ctx.getSource().sendSuccess(() -> Component.literal("§aЗапрос отправлен всем мэрам онлайн!"), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+
 
     /* ---------- /town invite <player> ---------- */
     private static int invite(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
@@ -174,7 +343,7 @@ public final class TownCommands {
 
         t.addInvite(target.getUUID());
         d.setDirty();
-        target.displayClientMessage(Component.literal("§6Приглашение в §e"+t.getName()+"§6. /town accept"),false);
+        target.displayClientMessage(Component.literal("§6Приглашение в §e" + t.getName() + "§6. Введите: §b/town accept " + t.getName()), false);
         success(ctx,"§aПриглашение отправлено.");
         return Command.SINGLE_SUCCESS;
     }
@@ -414,14 +583,28 @@ public final class TownCommands {
     /*                         К О М А Н Д - Д Е Р Е В О                  */
     /* ------------------------------------------------------------------ */
 
-    private static LiteralArgumentBuilder<CommandSourceStack> root(){
+    private static LiteralArgumentBuilder<CommandSourceStack> root() {
         return Commands.literal("town")
-                .then(cmdCreate()).then(cmdDelete()).then(cmdClaim()).then(cmdUnclaim())
-                .then(cmdInfo()).then(cmdInvite()).then(cmdAccept()).then(cmdLeave())
-                .then(cmdKick()).then(cmdRank())
-                .then(cmdTownPvp()).then(cmdTownExplosion())
-                .then(cmdChunk());
+                .then(cmdCreate())
+                .then(cmdDelete())
+                .then(cmdClaim())
+                .then(cmdUnclaim())
+                .then(cmdInfo())
+                .then(cmdInvite())
+                .then(cmdAccept())
+                .then(cmdJoin())
+                .then(cmdLeave())
+                .then(cmdKick())
+                .then(cmdRank())
+                .then(cmdTownPvp())
+                .then(cmdTownExplosion())
+                .then(cmdOpen())      // <-- добавить
+                .then(cmdClose())     // <-- добавить
+                .then(cmdChunk())
+                .then(cmdAsk());
     }
+
+
 
     /* ----- листья ----- */
     private static LiteralArgumentBuilder<CommandSourceStack> cmdCreate(){ return Commands.literal("create")
@@ -439,6 +622,22 @@ public final class TownCommands {
                         .executes(TownCommands::accept));
 
     }
+    private static LiteralArgumentBuilder<CommandSourceStack> cmdOpen() {
+        return Commands.literal("open").executes(TownCommands::openTown);
+    }
+    private static LiteralArgumentBuilder<CommandSourceStack> cmdClose() {
+        return Commands.literal("close").executes(TownCommands::closeTown);
+    }
+    private static LiteralArgumentBuilder<CommandSourceStack> cmdJoin() {
+        return Commands.literal("join")
+                .then(Commands.argument("name", StringArgumentType.word())
+                        .executes(TownCommands::joinTown));
+    }
+    private static LiteralArgumentBuilder<CommandSourceStack> cmdAsk() {
+        return Commands.literal("ask").executes(TownCommands::ask);
+    }
+
+
 
     private static LiteralArgumentBuilder<CommandSourceStack> cmdLeave(){return Commands.literal("leave").executes(TownCommands::leave);}
     private static LiteralArgumentBuilder<CommandSourceStack> cmdKick(){return Commands.literal("kick")
