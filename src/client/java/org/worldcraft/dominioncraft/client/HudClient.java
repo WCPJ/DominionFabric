@@ -1,3 +1,7 @@
+/* ===================================================================== *
+ *  file: org/worldcraft/dominioncraft/client/HudClient.java             *
+ *  desc: клиентский приёмник HUD‑пакета (7 полей)                       *
+ * ===================================================================== */
 package org.worldcraft.dominioncraft.client;
 
 import net.fabricmc.api.ClientModInitializer;
@@ -9,42 +13,47 @@ import net.minecraft.network.FriendlyByteBuf;
 import org.worldcraft.dominioncraft.Dominioncraft;
 
 /**
- * Принимает пакет hud_update от сервера и
- * кеширует данные для отрисовки HUD-панели.
+ * Получает пакет {@code hud_update} от сервера и кеширует значения,
+ * которые читает {@link HudOverlay} при отрисовке.
  */
-public class HudClient implements ClientModInitializer {
+public final class HudClient implements ClientModInitializer {
 
-    /* — актуальные значения, которые читает HudOverlay — */
-    public static String territory = "…";
-    public static String town      = "…";
-    public static String rank      = "…";
-    public static String mayor     = "…";
-    public static boolean chunkPvp = false;
+    /* ── публичные кэш‑поля, читаются в HudOverlay ── */
+    public static String territory   = "…";
+    public static String town        = "…";
+    public static String townRank    = "…";
+    public static String mayor       = "…";
+    public static String nation      = "…";
+    public static String nationRank  = "…";
+    public static boolean chunkPvp   = false;
 
     @Override
     public void onInitializeClient() {
-        /* регистрируем глобальный приёмник пакета */
         ClientPlayNetworking.registerGlobalReceiver(
                 Dominioncraft.HUD_PACKET,
                 (client, handler, buf, responder) -> handle(buf));
     }
 
-    /** Читает пакет в рабочем (клиентском) потоке. */
+    /* ───────────────────────── handle ───────────────────────── */
     private static void handle(FriendlyByteBuf buf) {
-        /* читаем в переменные */
-        final String terr = buf.readUtf();
-        final String twn  = buf.readUtf();
-        final String rng  = buf.readUtf();
-        final String myr  = buf.readUtf();
-        final boolean pvp = buf.readBoolean();
+        /* порядок ДОЛЖЕН совпадать с sendHudUpdate(...) на сервере */
+        final String terr  = buf.readUtf();
+        final String twn   = buf.readUtf();
+        final String tRank = buf.readUtf();
+        final String myr   = buf.readUtf();
+        final String nat   = buf.readUtf();
+        final String nRank = buf.readUtf();
+        final boolean pvp  = buf.readBoolean();
 
-        /* вызываем на главном потоке клиента, чтобы избежать гонок */
+        /* обновляем поля на главном клиентском потоке */
         Minecraft.getInstance().execute(() -> {
-            territory = terr;
-            town      = twn;
-            rank      = rng;
-            mayor     = myr;
-            chunkPvp  = pvp;
+            territory  = terr;
+            town       = twn;
+            townRank   = tRank;
+            mayor      = myr;
+            nation     = nat;
+            nationRank = nRank;
+            chunkPvp   = pvp;
         });
     }
 }

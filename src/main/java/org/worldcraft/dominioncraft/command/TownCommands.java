@@ -20,11 +20,15 @@ import net.minecraft.network.chat.Style;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.ChunkPos;
+import org.worldcraft.dominioncraft.nation.Nation;
 import org.worldcraft.dominioncraft.town.*;
 
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class TownCommands {
@@ -56,6 +60,37 @@ public final class TownCommands {
     public static void register(CommandDispatcher<CommandSourceStack> d) {
         d.register(root());
     }
+    private static final Map<String, Long> COMMAND_COOLDOWNS = new HashMap<>();
+
+
+
+    public static long parseCooldown(String input) {
+        input = input.trim().toLowerCase();
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("(\\d+)([hms])");
+        java.util.regex.Matcher matcher = pattern.matcher(input);
+        long ticks = 0;
+        while (matcher.find()) {
+            int value = Integer.parseInt(matcher.group(1));
+            switch (matcher.group(2)) {
+                case "h" -> ticks += value * 60L * 60L * 20L;
+                case "m" -> ticks += value * 60L * 20L;
+                case "s" -> ticks += value * 20L;
+            }
+        }
+        return ticks;
+    }
+
+    public static boolean checkCooldown(UUID uuid, String type, long ticks, long worldTicks, CommandContext<CommandSourceStack> ctx, String message) {
+        String key = type + ":" + uuid.toString();
+        Long last = COMMAND_COOLDOWNS.getOrDefault(key, 0L);
+        if (worldTicks < last + ticks) {
+            long left = (last + ticks - worldTicks) / 20;
+            ctx.getSource().sendFailure(Component.literal(message.replace("%s", left + " сек.")));
+            return true;
+        }
+        COMMAND_COOLDOWNS.put(key, worldTicks);
+        return false;
+    }
 
     /* ------------------------------------------------------------------ */
     /*                    ░░  О С Н О В Н Ы Е   К М Д  ░░                 */
@@ -69,24 +104,31 @@ public final class TownCommands {
         TownData d   = TownData.get(p.serverLevel());
         ChunkPos pos = new ChunkPos(p.blockPosition());
 
+        // 1) Уже занята эта позиция?
         if (d.getTownByChunk(pos) != null) {
             ctx.getSource().sendFailure(Component.literal("§cЭтот чанк уже занят."));
             return 0;
         }
+        // 2) Уникальность имени
+        if (d.getTownByName(name) != null) {
+            ctx.getSource().sendFailure(Component.literal("§cГород с таким названием уже существует."));
+            return 0;
+        }
 
-        // Новый блок: Показываем, чего не хватает!
+        // 3) Проверка ресурсов
         Map<Item, Integer> missing = TownRequirements.getMissingItems(p);
         if (!missing.isEmpty()) {
             ctx.getSource().sendFailure(Component.literal(TownRequirements.missingText(missing)));
             return 0;
         }
 
-        // Всё есть — снимаем ресурсы
+        // 4) Снимаем ресурсы и создаём
         TownRequirements.removeRequiredItems(p);
-
         d.createTown(name, p.getUUID(), pos);
+        Nation.GlobalNews.broadcast(p.getServer(), "Был образован новый город \"" + name + "\"");
         ctx.getSource().sendSuccess(() ->
                 Component.literal("§aГород «" + name + "» создан!"), false);
+
         return Command.SINGLE_SUCCESS;
     }
 
@@ -102,10 +144,21 @@ public final class TownCommands {
         if (!t.hasPermission(pl.getUUID(), TownPermission.DELETE))
             return fail(ctx, "§cНет права удалять город.");
 
+        // Проверка на нацию!
+        if (t.getNation() != null) {
+            return fail(ctx, "§cГород состоит в нации! Сначала выйдите из нации командой /nation leave.");
+        }
+
         d.deleteTown(t);
+
+        // Глобальное оповещение
+        Nation.GlobalNews.broadcast(pl.getServer(), "Город \"" + t.getName() + "\" перестал существовать");
+
         success(ctx, "§eГород удалён.");
         return Command.SINGLE_SUCCESS;
     }
+
+
 
     /* ---------- /town claim (смежный) ---------- */
     private static int claim(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
@@ -279,6 +332,11 @@ public final class TownCommands {
     private static int ask(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
         TownData d = TownData.get(player.serverLevel());
+        long now = player.serverLevel().getGameTime();
+
+        if (checkCooldown(player.getUUID(), "ASK", parseCooldown("1m"), now, ctx, "§cЖдите %s для повторного запроса!")) return 0;
+
+
 
         // Проверка: если уже в городе — ошибка!
         if (d.getTownOfPlayer(player.getUUID()) != null) {
@@ -325,6 +383,7 @@ public final class TownCommands {
 
 
 
+
     /* ---------- /town invite <player> ---------- */
     private static int invite(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer inv  = ctx.getSource().getPlayerOrException();
@@ -341,12 +400,19 @@ public final class TownCommands {
         if (t.getMembers().contains(target.getUUID()))
             return fail(ctx,"§eИгрок уже в городе.");
 
+        // --- Задержка 30 секунд на приглашения
+        long now = inv.getServer().overworld().getGameTime();
+        if (checkCooldown(inv.getUUID(), "INVITE", 30 * 20L, now, ctx, "§cПодождите %s перед следующим приглашением!"))
+            return 0;
+
         t.addInvite(target.getUUID());
         d.setDirty();
         target.displayClientMessage(Component.literal("§6Приглашение в §e" + t.getName() + "§6. Введите: §b/town accept " + t.getName()), false);
         success(ctx,"§aПриглашение отправлено.");
         return Command.SINGLE_SUCCESS;
     }
+
+
 
     /* ---------- /town accept ---------- */
     private static int accept(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
@@ -406,22 +472,27 @@ public final class TownCommands {
     /* ---------- /town kick <player> ---------- */
     private static int kick(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer kicker = ctx.getSource().getPlayerOrException();
-        String name         = StringArgumentType.getString(ctx,"player");
+        String name         = StringArgumentType.getString(ctx, "player");
         TownData d          = TownData.get(kicker.serverLevel());
         Town t              = d.getTownOfPlayer(kicker.getUUID());
 
-        if (t==null) return fail(ctx,"§cВы не в городе.");
-        if (!t.hasPermission(kicker.getUUID(),TownPermission.KICK))
-            return fail(ctx,"§cНет права кикать.");
+        if (t == null) return fail(ctx, "§cВы не в городе.");
+        if (!t.hasPermission(kicker.getUUID(), TownPermission.KICK))
+            return fail(ctx, "§cНет права кикать.");
 
         ServerPlayer target = kicker.getServer().getPlayerList().getPlayerByName(name);
-        if (target==null || !t.getMembers().contains(target.getUUID()))
-            return fail(ctx,"§cИгрок не найден в городе.");
+        if (target == null || !t.getMembers().contains(target.getUUID()))
+            return fail(ctx, "§cИгрок не найден в городе.");
+
+        // Нельзя кикать самого себя
+        if (target.getUUID().equals(kicker.getUUID())) {
+            return fail(ctx, "§cМэр не может выгнать сам себя.");
+        }
 
         t.removeMember(target.getUUID());
         d.setDirty();
         kicker.sendSystemMessage(Component.literal("§aИгрок изгнан."));
-        target.displayClientMessage(Component.literal("§cВы изгнаны из "+t.getName()),false);
+        target.displayClientMessage(Component.literal("§cВы изгнаны из " + t.getName()), false);
         return Command.SINGLE_SUCCESS;
     }
 
@@ -472,11 +543,17 @@ public final class TownCommands {
         if (!t.hasPermission(pl.getUUID(),TownPermission.MANAGE_PVP))
             return fail(ctx,"§cНет права.");
 
+        // --- Задержка 30 секунд
+        long now = pl.getServer().overworld().getGameTime();
+        if (checkCooldown(pl.getUUID(), "TOWN_PVP", 30 * 20L, now, ctx, "§cПодождите %s перед изменением PvP города!"))
+            return 0;
+
         t.setTownPvp(flag);
         d.setDirty();
         success(ctx,"§ePvP города: "+flag);
         return Command.SINGLE_SUCCESS;
     }
+
 
     /* ---------- /town chunk pvp ... ---------- */
     private static int chunkPvpFlag(CommandContext<CommandSourceStack> ctx)throws CommandSyntaxException{
@@ -496,17 +573,23 @@ public final class TownCommands {
             return fail(ctx,"§cНет права.");
         if (!t.owns(pos)) return fail(ctx,"§cЧанк не вашего города.");
 
+        // --- Задержка 30 секунд
+        long now = pl.getServer().overworld().getGameTime();
+        if (checkCooldown(pl.getUUID(), "CHUNK_PVP", 30 * 20L, now, ctx, "§cПодождите %s перед изменением PvP чанка!"))
+            return 0;
+
         t.chunk(pos).setPvp(flag);
         d.setDirty();
         success(ctx,"§ePvP чанка: "+(flag==null?"reset":flag));
         return Command.SINGLE_SUCCESS;
     }
 
+
     /* ------------------------------------------------------------------ */
     /*                    ░░   В З Р Ы В Ы   ░░                            */
     /* ------------------------------------------------------------------ */
 
-    private static int townExplosion(CommandContext<CommandSourceStack> ctx)throws CommandSyntaxException{
+    private static int townExplosion(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer pl = ctx.getSource().getPlayerOrException();
         boolean flag    = BoolArgumentType.getBool(ctx,"flag");
         TownData d      = TownData.get(pl.serverLevel());
@@ -517,11 +600,17 @@ public final class TownCommands {
                 && !t.hasPermission(pl.getUUID(),TownPermission.MANAGE_PVP))
             return fail(ctx,"§cНет права.");
 
+        // --- Задержка 30 секунд
+        long now = pl.getServer().overworld().getGameTime();
+        if (checkCooldown(pl.getUUID(), "TOWN_EXPLOSION", 30 * 20L, now, ctx, "§cПодождите %s перед изменением взрывов в городе!"))
+            return 0;
+
         t.setTownExplosion(flag);
         d.setDirty();
         success(ctx,"§eВзрывы в городе: "+flag);
         return Command.SINGLE_SUCCESS;
     }
+
 
     private static int chunkExplosionFlag(CommandContext<CommandSourceStack> ctx)throws CommandSyntaxException{
         return setChunkExplosion(ctx,BoolArgumentType.getBool(ctx,"flag"));
@@ -529,7 +618,7 @@ public final class TownCommands {
     private static int chunkExplosionReset(CommandContext<CommandSourceStack> ctx)throws CommandSyntaxException{
         return setChunkExplosion(ctx,null);
     }
-    private static int setChunkExplosion(CommandContext<CommandSourceStack> ctx, Boolean flag)throws CommandSyntaxException{
+    private static int setChunkExplosion(CommandContext<CommandSourceStack> ctx, Boolean flag) throws CommandSyntaxException {
         ServerPlayer pl = ctx.getSource().getPlayerOrException();
         TownData d      = TownData.get(pl.serverLevel());
         Town t          = d.getTownOfPlayer(pl.getUUID());
@@ -540,11 +629,17 @@ public final class TownCommands {
             return fail(ctx,"§cНет права.");
         if (!t.owns(pos)) return fail(ctx,"§cЧанк не вашего города.");
 
+        // --- Задержка 30 секунд
+        long now = pl.getServer().overworld().getGameTime();
+        if (checkCooldown(pl.getUUID(), "CHUNK_EXPLOSION", 30 * 20L, now, ctx, "§cПодождите %s перед изменением взрывов в чанке!"))
+            return 0;
+
         t.chunk(pos).setExplosion(flag);
         d.setDirty();
         success(ctx,"§eВзрывы в чанке: "+(flag==null?"reset":flag));
         return Command.SINGLE_SUCCESS;
     }
+
 
     /* ------------------------------------------------------------------ */
     /*               ░░   Ч А Н К  P E R M S (build / …) ░░               */

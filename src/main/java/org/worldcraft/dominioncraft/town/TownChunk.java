@@ -41,6 +41,9 @@ public class TownChunk {
     public TownChunk(ChunkPos pos) {
         this.pos = pos;
     }
+    public Map<UUID, EnumSet<TownPermission>> getPlayerPerms() {
+        return playerPerms;
+    }
 
     /* ------------------------------------------------------------------ */
     /*                           EXPLOSION-флаг                            */

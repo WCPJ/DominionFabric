@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version '1.10.5'
+    id 'fabric-loom' version '1.11-SNAPSHOT'
     id 'maven-publish'
 }
 
@@ -40,8 +40,9 @@ dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    implementation files('libs/pointblank-fabric-1.20.1-1.9.6.jar')
+    modImplementation files('libs/bluemap-api-2.7.3.jar')
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation    'com.flowpowered:flow-math:1.0.3'   // Maven‑координаты
 }
 
 processResources {

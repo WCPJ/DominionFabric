@@ -17,6 +17,7 @@ public class Town {
     private final UUID id;
     private String     name;
     private final UUID mayor;
+    private UUID nationId = null;
 
     private boolean townPvp = false;
     private boolean townExplosion = false;
@@ -28,6 +29,7 @@ public class Town {
 
     /** Все участники города. */
     private final Set<UUID> members = new HashSet<>();
+
 
     /** Ранг каждого участника. */
     private final Map<UUID, TownRank> ranks = new HashMap<>();
@@ -43,7 +45,12 @@ public class Town {
 
     public void setTownExplosion(boolean flag) { this.townExplosion = flag; }
     public boolean getTownExplosion() { return townExplosion; }
-    public boolean isOpen() {
+
+    public UUID getNation()        { return nationId; }
+
+    public void setNation(UUID id) { this.nationId = id;}
+
+        public boolean isOpen() {
         return open;
     }
     public void setOpen(boolean open) {

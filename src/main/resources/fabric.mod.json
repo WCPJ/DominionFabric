@@ -20,6 +20,7 @@
     "client": [
       "org.worldcraft.dominioncraft.client.HudClient",
       "org.worldcraft.dominioncraft.client.HudOverlay"
+
     ],
     "fabric-datagen": [
       "org.worldcraft.dominioncraft.client.DominioncraftDataGenerator"
@@ -33,7 +34,7 @@
     }
   ],
   "depends": {
-    "fabricloader": ">=0.15.0",
+    "fabricloader": ">=0.15.11",
     "fabric": "*",
     "minecraft": "1.20.1"
   }
